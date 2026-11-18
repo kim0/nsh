@@ -86,6 +86,30 @@ impl Fixture {
         GtkWindowExt::focus(&self.window).is_some_and(|w| w == *view.upcast_ref::<gtk::Widget>() || w.is_ancestor(&view))
     }
 
+    // Read only, and called only when an assertion fails; do not pump GTK here.
+    fn diagnostic(&self) -> String {
+        let focused = GtkWindowExt::focus(&self.window);
+        let kind = focused.as_ref().map(|widget| widget.type_().name());
+        let mut owner = focused;
+        let mut node = None;
+        while let Some(widget) = owner {
+            if let Some(view) = widget.downcast_ref::<crate::view::NshView>() {
+                node = Some(view.state().id);
+                break;
+            }
+            owner = widget.parent();
+        }
+        let mounter = self.surface.mounter.borrow();
+        let views: Vec<_> = [2, 3, 4, 5, 7, 20, 21].into_iter().filter_map(|id| {
+            let view = mounter.views.get(&id)?;
+            let state = view.state();
+            Some((id, view.is_focusable(), crate::key_focus::is_stop(view),
+                view.is_visible(), view.is_sensitive(), view.can_target(),
+                state.props.focusable, state.area_selection))
+        }).collect();
+        format!("focused_node={node:?} widget_type={kind:?} visits={} views(id,native_focusable,stop,visible,sensitive,targetable,declared_focusable,selection)={views:?}", self.visits.get())
+    }
+
     fn reset(&self) {
         self.apply(vec![props(2, true, false, false), props(3, false, false, false),
             props(7, true, false, false), hidden(7, false), command(2, Command::Focus)]);
@@ -152,8 +176,8 @@ fn handoff(early: bool) {
         let mut items = vec![props(2, false, false, false), props(3, true, false, false)];
         items.insert(if early { 0 } else { items.len() }, command(3, Command::Focus));
         f.apply(items);
-        assert!(f.focused(3), "early={early}");
-        assert_eq!(f.visits.get(), 0, "early={early}");
+        assert!(f.focused(3), "early={early}; {}", f.diagnostic());
+        assert_eq!(f.visits.get(), 0, "early={early}; {}", f.diagnostic());
     });
 }
 
@@ -172,7 +196,7 @@ fn following_batch_without_focus_restores_ordinary_fallback() {
         f.reset();
         f.apply(vec![props(3, true, false, false)]);
         f.apply(vec![props(2, false, false, false)]);
-        assert!(wait_until(|| f.focused(3)));
+        assert!(wait_until(|| f.focused(3)), "{}", f.diagnostic());
     });
 }
 
@@ -196,9 +220,9 @@ fn eligible_assistive_focus_keeps_command_order() {
     run(|| {
         let f = Fixture::new();
         f.apply(vec![props(3, true, false, false), command(3, Command::Focus), command(5, Command::AccessibilityFocus)]);
-        assert!(f.focused(5));
+        assert!(f.focused(5), "{}", f.diagnostic());
         f.apply(vec![command(5, Command::AccessibilityFocus), command(3, Command::Focus)]);
-        assert!(f.focused(3));
+        assert!(f.focused(3), "{}", f.diagnostic());
     });
 }
 
@@ -214,7 +238,7 @@ fn final_request(refusal: u8) {
             _ => {}
         }
         f.apply(items);
-        assert!(f.focused(if refusal < 3 { 3 } else { 7 }));
+        assert!(f.focused(if refusal < 3 { 3 } else { 7 }), "refusal={refusal}; {}", f.diagnostic());
     });
 }
 
@@ -236,8 +260,8 @@ fn a_refused_handoff_clears_invalid_focus_without_sentinel_visits() {
         let f = Fixture::new();
         f.reset();
         f.apply(vec![command(7, Command::Focus), props(2, false, false, false), hidden(7, true)]);
-        assert!(GtkWindowExt::focus(&f.window).is_none());
-        assert_eq!(f.visits.get(), 0);
+        assert!(GtkWindowExt::focus(&f.window).is_none(), "{}", f.diagnostic());
+        assert_eq!(f.visits.get(), 0, "{}", f.diagnostic());
     });
 }
 
@@ -280,15 +304,15 @@ fn selection_refusal(hide: bool) {
     run(move || {
         let f = Fixture::new();
         f.selection();
-        assert!(!view(&f.surface, 20).is_focusable());
+        assert!(!view(&f.surface, 20).is_focusable(), "{}", f.diagnostic());
         f.select();
         f.apply(vec![command(99, Command::Focus), if hide { hidden(20, true) } else { props(20, false, true, true) }]);
-        assert!(!view(&f.surface, 20).is_focusable());
-        assert!(!f.focused(20));
-        assert!(view(&f.surface, 21).state().area_selection.is_none());
+        assert!(!view(&f.surface, 20).is_focusable(), "{}", f.diagnostic());
+        assert!(!f.focused(20), "{}", f.diagnostic());
+        assert!(view(&f.surface, 21).state().area_selection.is_none(), "{}", f.diagnostic());
         f.apply(vec![hidden(20, false), props(20, false, true, false)]);
-        assert!(!view(&f.surface, 20).is_focusable());
-        assert!(view(&f.surface, 21).state().area_selection.is_none());
+        assert!(!view(&f.surface, 20).is_focusable(), "{}", f.diagnostic());
+        assert!(view(&f.surface, 21).state().area_selection.is_none(), "{}", f.diagnostic());
     });
 }
 
@@ -306,20 +330,20 @@ fn empty_dual_owner_gains_and_loses_ordinary_focus() {
         let area = view(&f.surface, 20);
         let text = view(&f.surface, 21);
         assert!(area.state().props.selectable_view);
-        assert!(!area.is_focusable());
-        assert!(text.state().area_selection.is_none());
+        assert!(!area.is_focusable(), "{}", f.diagnostic());
+        assert!(text.state().area_selection.is_none(), "{}", f.diagnostic());
         f.apply(vec![props(20, true, true, false)]);
         assert!(area.state().props.selectable_view);
         assert!(crate::key_focus::is_stop(&area));
         f.apply(vec![command(20, Command::Focus)]);
         assert!(f.focused(20));
-        assert!(text.state().area_selection.is_none());
+        assert!(text.state().area_selection.is_none(), "{}", f.diagnostic());
         f.apply(vec![props(20, false, true, false)]);
         assert!(area.state().props.selectable_view);
         assert!(!area.state().props.focus_stop(false));
-        assert!(text.state().area_selection.is_none());
-        assert!(!area.is_focusable());
-        assert!(!f.focused(20));
+        assert!(text.state().area_selection.is_none(), "{}", f.diagnostic());
+        assert!(!area.is_focusable(), "{}", f.diagnostic());
+        assert!(!f.focused(20), "{}", f.diagnostic());
     });
 }
 
