@@ -69,6 +69,7 @@ pub(crate) fn is_stop(view: &NshView) -> bool {
     {
         let state = view.state();
         if state.kind == ViewKind::Input
+            || state.style.hidden
             || !state
                 .props
                 .focus_stop(state.events.contains(EventKind::Press))
@@ -77,6 +78,19 @@ pub(crate) fn is_stop(view: &NshView) -> bool {
         }
     }
     view.can_target() && view.is_visible()
+}
+
+/// A mounted change can make the keyboard stop ineligible without moving
+/// GTK's focus. Let the normal focus watcher clear its state and report Blur.
+/// Selection-only areas and native inputs do not own this keyboard-stop state.
+pub(crate) fn changed(view: &NshView) {
+    let was_stop = {
+        let current = view.state();
+        current.kind != ViewKind::Input && current.states & state::FOCUSED != 0
+    };
+    if was_stop && !is_stop(view) {
+        blur(view);
+    }
 }
 
 /// `focus()` on a view that is not an input: the focus moves to it as Tab
