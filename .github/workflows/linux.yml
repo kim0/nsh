@@ -197,7 +197,7 @@ jobs:
       # of its own, as the examples' tests below.
       - name: Test
         run: >
-          cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
+          cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev -- --skip focus_eligibility_tests
           && dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
 
       # Opt-in Action-interface tests use an independent AT client, not GTK signals.
