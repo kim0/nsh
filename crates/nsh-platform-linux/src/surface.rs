@@ -856,3 +856,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "focus_eligibility_tests.rs"]
+mod focus_eligibility_tests;
