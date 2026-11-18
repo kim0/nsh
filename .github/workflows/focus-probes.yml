@@ -1,0 +1,35 @@
+name: Focus probes
+
+# Fork-only: runs the focus and selection probes over upstream main plus the
+# once-per-press change. It is never part of a pull request.
+on:
+  push:
+    branches: [linux-focus-probes]
+
+permissions:
+  contents: read
+
+jobs:
+  probes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang, GTK 4, WebKitGTK and GStreamer
+        run: >
+          sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev
+          libwebkitgtk-6.0-dev xvfb xauth at-spi2-core python3 libxtst6 libgstreamer1.0-dev
+          libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Run the probes
+        run: dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --lib surface::focus_batches_tests -- --nocapture
+
+      - name: Clippy
+        if: always()
+        run: cargo clippy -p nsh-platform-linux --all-targets -- -D warnings

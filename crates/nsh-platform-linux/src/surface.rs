@@ -823,6 +823,9 @@ pub(crate) fn widget(surface: &Surface) -> gtk::Widget {
 }
 
 #[cfg(test)]
+mod focus_batches_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Instant;
 
