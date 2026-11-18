@@ -1,0 +1,43 @@
+name: Key repeat demo
+
+# Fork-only evidence for "linux: Press a focused stop once per key press,
+# not on auto-repeat". The same commit sits on the base and on the head.
+# It is never part of the pull request.
+on:
+  push:
+    branches: [linux-key-repeat-demo-base, linux-key-repeat-demo-head]
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install clang, GTK 4, WebKitGTK and the X11 tools
+        run: >
+          sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev
+          libwebkitgtk-6.0-dev xvfb xauth at-spi2-core python3 libxtst6 libgstreamer1.0-dev
+          libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+          xdotool xinput x11-xserver-utils imagemagick openbox
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the CLI
+        run: cargo build -p nsh-cli
+
+      - name: Hold Return, then Space, on the counter's focused button
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1024x768x24' bash .github/key-repeat-demo.sh
+
+      - name: Print the screenshots into the log
+        if: always()
+        run: |
+          for file in shots/*.png; do
+            echo "PNG_BEGIN $file $(sha256sum < "$file" | cut -c1-64)"
+            base64 -w 4000 "$file" | sed "s|^|PNG_DATA $file |"
+            echo "PNG_END $file"
+          done
