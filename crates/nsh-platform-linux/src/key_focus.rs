@@ -69,7 +69,6 @@ pub(crate) fn is_stop(view: &NshView) -> bool {
     {
         let state = view.state();
         if state.kind == ViewKind::Input
-            || state.style.hidden
             || !state
                 .props
                 .focus_stop(state.events.contains(EventKind::Press))
