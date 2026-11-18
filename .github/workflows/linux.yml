@@ -192,6 +192,13 @@ jobs:
       - name: Test without optional features
         run: xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
 
+      # Fork witness only: run before the broader suite so its known reds
+      # cannot prevent the native focus diagnostics from being printed.
+      - name: Test focus eligibility witness
+        run: >
+          dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux
+          --features webview --lib surface::focus_eligibility_tests -- --nocapture --test-threads=1
+
       # The backend's tests that make GTK widgets (`gtk_test`) run where a
       # display opens: the second run has a virtual one, with a session bus
       # of its own, as the examples' tests below.

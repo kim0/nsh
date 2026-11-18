@@ -73,6 +73,7 @@ fn loses_focus(change: MountItem) {
         first.state().props.accessibility.state.disabled,
         first.state().states & state::FOCUSED != 0,
     );
+    eprintln!("focus eligibility witness: {diagnostic}");
     window.destroy();
     assert!(
         cleared,
