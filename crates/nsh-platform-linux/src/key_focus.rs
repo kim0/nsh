@@ -88,7 +88,7 @@ pub(crate) fn changed(view: &NshView) {
         let current = view.state();
         current.kind != ViewKind::Input && current.states & state::FOCUSED != 0
     };
-    if was_stop && !is_stop(view) {
+    if was_stop {
         blur(view);
     }
 }
