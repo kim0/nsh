@@ -630,6 +630,242 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Copy)]
+    enum AfterPress {
+        Stay,
+        FocusStop,
+        OpenWindow,
+        OpenWindowThenLoseFocus,
+    }
+
+    #[derive(Clone)]
+    struct StopPresses {
+        nodes: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        after: AfterPress,
+    }
+
+    #[nsh_core::element::component]
+    fn RepeatStops() -> impl nsh_core::element::IntoElement {
+        use nsh_core::prelude::*;
+
+        let recorded = engine_context::<StopPresses>().unwrap();
+        let first = recorded.nodes.clone();
+        let second = recorded.nodes.clone();
+        let after = recorded.after;
+        let opened = recorded.nodes.clone();
+        let next = element_ref();
+        view().children([
+            view()
+                .test_id("first-stop")
+                .w(px(100.0))
+                .h(px(40.0))
+                .on_press(move || {
+                    first.lock().unwrap().push("first");
+                    match after {
+                        AfterPress::Stay => {}
+                        AfterPress::FocusStop => next.focus(),
+                        AfterPress::OpenWindow | AfterPress::OpenWindowThenLoseFocus => {
+                            let opened = opened.clone();
+                            nsh_core::element::desktop::open_window(
+                                nsh_core::element::desktop::window()
+                                    .id("repeat-window")
+                                    .content(move || {
+                                        let target = element_ref();
+                                        let opened = opened.clone();
+                                        view()
+                                            .test_id("window-stop")
+                                            .element_ref(&target)
+                                            .w(px(100.0))
+                                            .h(px(40.0))
+                                            .on_layout(move || target.focus())
+                                            .on_press(move || {
+                                                opened.lock().unwrap().push("second");
+                                            })
+                                    }),
+                            )
+                            .expect("the handler opens a window");
+                        }
+                    }
+                }),
+            view()
+                .test_id("second-stop")
+                .element_ref(&next)
+                .w(px(100.0))
+                .h(px(40.0))
+                .on_press(move || second.lock().unwrap().push("second")),
+        ])
+    }
+
+    fn repeated_return(after: AfterPress) {
+        run(move || {
+            let surface = surface();
+            let mut environment = surface.environment.get();
+            environment.os = Os::Linux;
+            surface.set_environment(environment);
+            let nodes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut config = nsh_engine::EngineConfig::new(nsh_engine::Root::of::<RepeatStops>());
+            config.context = config.context.with(StopPresses {
+                nodes: nodes.clone(),
+                after,
+            });
+            surface.start(config);
+            let window = show(&surface);
+            let find = |name| {
+                surface
+                    .mounter
+                    .borrow()
+                    .views
+                    .values()
+                    .find(|view| view.state().props.test_id.as_deref() == Some(name))
+                    .filter(|view| view.is_mapped())
+                    .cloned()
+            };
+            assert!(wait_until(|| {
+                find("first-stop").is_some() && find("second-stop").is_some()
+            }));
+            let first = find("first-stop").unwrap();
+            let second = find("second-stop").unwrap();
+            // Neither stop listens to raw keys: exercise press -> defaults
+            // -> presses -> input::activate, not just KeyDown notification.
+            assert!(!crate::keyboard::listens(&surface, &first));
+            assert!(!crate::keyboard::listens(&surface, &second));
+            focus(&first);
+            assert!(first.is_focus());
+            if matches!(after, AfterPress::OpenWindow | AfterPress::OpenWindowThenLoseFocus) {
+                assert!(
+                    wait_until(|| window.is_active()),
+                    "setup must activate the original native window before the first press"
+                );
+            }
+            let code = keycode(gdk::Key::Return);
+            let down = |window: &gtk::Window| {
+                press(
+                    &surface,
+                    Some(window.upcast_ref()),
+                    None,
+                    gdk::Key::Return,
+                    code,
+                    gdk::ModifierType::empty(),
+                    0,
+                )
+            };
+            let flush = || {
+                let (sent, received) = std::sync::mpsc::channel();
+                surface.control(|control| {
+                    control.flush(move |done| {
+                        let _ = sent.send(done);
+                    });
+                });
+                assert!(wait_until(|| received.try_recv() == Ok(true)));
+            };
+            down(&window);
+            flush();
+            assert_eq!(*nodes.lock().unwrap(), ["first"]);
+            let repeat_window = match after {
+                AfterPress::Stay => {
+                    assert!(first.is_focus());
+                    window.clone()
+                }
+                AfterPress::FocusStop => {
+                    assert!(wait_until(|| second.is_focus()));
+                    window.clone()
+                }
+                AfterPress::OpenWindow | AfterPress::OpenWindowThenLoseFocus => {
+                    assert!(wait_until(|| find("window-stop").is_some()));
+                    let stop = find("window-stop").unwrap();
+                    assert!(!crate::keyboard::listens(&surface, &stop));
+                    let opened = stop.root().unwrap().downcast::<gtk::Window>().unwrap();
+                    assert_ne!(opened, window, "setup must open a distinct native window");
+                    assert!(
+                        wait_until(|| {
+                            stop.is_focus() && opened.is_active() && !window.is_active()
+                        }),
+                        "setup must activate the new native window and deactivate the old one"
+                    );
+                    // Let the old window's deferred deactivation handler
+                    // run before the repeat reaches the new window.
+                    let idle = Rc::new(Cell::new(false));
+                    let done = idle.clone();
+                    glib::idle_add_local_once(move || done.set(true));
+                    assert!(wait_until(|| idle.get()));
+                    opened
+                }
+            };
+            if matches!(after, AfterPress::OpenWindowThenLoseFocus) {
+                // Model the settled external-loss notification through the
+                // existing private helper, not an external process or a
+                // synthesized release. No repeat has updated the old hold.
+                crate::keyboard::window_deactivated(&surface, &repeat_window);
+                assert!(
+                    !crate::keyboard::held_key(&surface, code),
+                    "external focus loss must recover a hold transferred without a repeat"
+                );
+                down(&repeat_window);
+                flush();
+                assert_eq!(*nodes.lock().unwrap(), ["first", "second"]);
+                repeat_window.destroy();
+                window.destroy();
+                return;
+            }
+            // The same physical key goes down again without an intervening
+            // release, just as GDK delivers an auto-repeat.
+            let consumed = down(&repeat_window);
+            flush();
+            assert_eq!(
+                *nodes.lock().unwrap(),
+                ["first"],
+                "a held Return must not press again"
+            );
+            assert!(consumed, "a repeated control key must not propagate");
+            assert!(crate::keyboard::held_key(&surface, code));
+            crate::keyboard::released(
+                &surface,
+                Some(&repeat_window),
+                focused_view(&surface, &repeat_window).as_ref(),
+                gdk::Key::Return,
+                code,
+                gdk::ModifierType::empty(),
+                0,
+            );
+            assert!(!crate::keyboard::held_key(&surface, code));
+            down(&repeat_window);
+            flush();
+            assert_eq!(
+                *nodes.lock().unwrap(),
+                [
+                    "first",
+                    if matches!(after, AfterPress::Stay) {
+                        "first"
+                    } else {
+                        "second"
+                    },
+                ]
+            );
+            repeat_window.destroy();
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn a_held_return_presses_a_stop_once() {
+        repeated_return(AfterPress::Stay);
+    }
+
+    #[test]
+    fn a_return_repeat_does_not_press_the_stop_focused_by_its_handler() {
+        repeated_return(AfterPress::FocusStop);
+    }
+
+    #[test]
+    fn a_return_repeat_does_not_press_the_stop_in_a_window_opened_by_its_handler() {
+        repeated_return(AfterPress::OpenWindow);
+    }
+
+    #[test]
+    fn external_focus_loss_recovers_a_hold_transferred_without_a_repeat() {
+        repeated_return(AfterPress::OpenWindowThenLoseFocus);
+    }
+
     #[test]
     fn a_capture_takes_the_key_before_the_defaults() {
         run(|| {
