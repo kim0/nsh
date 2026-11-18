@@ -677,7 +677,7 @@ mod tests {
                                             .element_ref(&target)
                                             .w(px(100.0))
                                             .h(px(40.0))
-                                            .on_layout(move || target.focus())
+                                            .on_layout(move |_| target.focus())
                                             .on_press(move || {
                                                 opened.lock().unwrap().push("second");
                                             })
